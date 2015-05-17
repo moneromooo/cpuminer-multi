@@ -120,6 +120,7 @@ enum mining_algo {
     ALGO_BLAKE,       /* Blake */
     ALGO_X11,         /* X11 */
     ALGO_CRYPTONIGHT, /* CryptoNight */
+    ALGO_CRYPTONIGHT_LIGHT, /* CryptoNight light (Aeon) */
 };
 
 static const char *algo_names[] = {
@@ -133,6 +134,7 @@ static const char *algo_names[] = {
     [ALGO_BLAKE] =       "blake",
     [ALGO_X11] =         "x11",
     [ALGO_CRYPTONIGHT] = "cryptonight",
+    [ALGO_CRYPTONIGHT_LIGHT] = "cryptonight-light",
 };
 
 bool opt_debug = false;
@@ -542,6 +544,7 @@ static void share_result(int result, struct work *work, const char *reason) {
 
     switch (opt_algo) {
     case ALGO_CRYPTONIGHT:
+    case ALGO_CRYPTONIGHT_LIGHT:
         applog(LOG_INFO, "accepted: %lu/%lu (%.2f%%), %.2f H/s at diff %g %s",
                 accepted_count, accepted_count + rejected_count,
                 100. * accepted_count / (accepted_count + rejected_count), hashrate,
@@ -582,10 +585,13 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
         if (jsonrpc_2) {
             noncestr = bin2hex(((const unsigned char*)work->data) + 39, 4);
             char hash[32];
+            int light=0;
             switch(opt_algo) {
+            case ALGO_CRYPTONIGHT_LIGHT:
+              light=1;
             case ALGO_CRYPTONIGHT:
             default:
-                cryptonight_hash(hash, work->data, 76);
+                cryptonight_hash(hash, work->data, 76, light);
             }
             char *hashhex = bin2hex(hash, 32);
             snprintf(s, JSON_BUF_LEN,
@@ -615,10 +621,13 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
         if(jsonrpc_2) {
             char *noncestr = bin2hex(((const unsigned char*)work->data) + 39, 4);
             char hash[32];
+            int light=0;
             switch(opt_algo) {
+            case ALGO_CRYPTONIGHT_LIGHT:
+              light=1;
             case ALGO_CRYPTONIGHT:
             default:
-                cryptonight_hash(hash, work->data, 76);
+                cryptonight_hash(hash, work->data, 76, light);
             }
             char *hashhex = bin2hex(hash, 32);
             snprintf(s, JSON_BUF_LEN,
@@ -1049,18 +1058,19 @@ static void *miner_thread(void *userdata) {
     }*/
     
 	persistentctx = persistentctxs[thr_id];
-	if(!persistentctx && opt_algo == ALGO_CRYPTONIGHT)
+	if(!persistentctx && (opt_algo == ALGO_CRYPTONIGHT || opt_algo == ALGO_CRYPTONIGHT_LIGHT))
 	{
 		#if defined __unix__ && (!defined __APPLE__) && (!defined DISABLE_LINUX_HUGEPAGES)
-		persistentctx = (struct cryptonight_ctx *)mmap(0, sizeof(struct cryptonight_ctx), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, 0, 0);
-		if(persistentctx == MAP_FAILED) persistentctx = (struct cryptonight_ctx *)malloc(sizeof(struct cryptonight_ctx));
-		madvise(persistentctx, sizeof(struct cryptonight_ctx), MADV_RANDOM | MADV_WILLNEED | MADV_HUGEPAGE);
-		if(!geteuid()) mlock(persistentctx, sizeof(struct cryptonight_ctx));
+        size_t size = (opt_algo == ALGO_CRYPTONIGHT_LIGHT) ? sizeof(struct cryptonight_light_ctx) : sizeof(struct cryptonight_ctx);
+		persistentctx = (struct cryptonight_ctx *)mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, 0, 0);
+		if(persistentctx == MAP_FAILED) persistentctx = (struct cryptonight_ctx *)malloc(size);
+		madvise(persistentctx, size, MADV_RANDOM | MADV_WILLNEED | MADV_HUGEPAGE);
+		if(!geteuid()) mlock(persistentctx, size);
 		#elif defined _WIN32
-		persistentctx = VirtualAlloc(NULL, sizeof(struct cryptonight_ctx), MEM_LARGE_PAGES, PAGE_READWRITE);
-		if(!persistentctx) persistentctx = (struct cryptonight_ctx *)malloc(sizeof(struct cryptonight_ctx));
+		persistentctx = VirtualAlloc(NULL, size, MEM_LARGE_PAGES, PAGE_READWRITE);
+		if(!persistentctx) persistentctx = (struct cryptonight_ctx *)malloc(size);
 		#else
-		persistentctx = (struct cryptonight_ctx *)malloc(sizeof(struct cryptonight_ctx));
+		persistentctx = (struct cryptonight_ctx *)malloc(size);
 		#endif
 	}
 	
@@ -1124,6 +1134,7 @@ static void *miner_thread(void *userdata) {
                 max64 = 0xfffLL;
                 break;
             case ALGO_CRYPTONIGHT:
+            case ALGO_CRYPTONIGHT_LIGHT:
 
                 max64 = 0x40LL;
                 break;
@@ -1142,7 +1153,7 @@ static void *miner_thread(void *userdata) {
 
         /* scan nonces for a proof-of-work hash */
             rc = scanhash_cryptonight(thr_id, work.data, work.target,
-                    max_nonce, &hashes_done, persistentctx);
+                    max_nonce, &hashes_done, persistentctx, (opt_algo == ALGO_CRYPTONIGHT_LIGHT));
 
         /* record scanhash elapsed time */
         gettimeofday(&tv_end, NULL );
@@ -1170,11 +1181,12 @@ static void *miner_thread(void *userdata) {
         if (opt_benchmark && thr_id == opt_n_threads - 1) {
             double hashrate = 0.;
             for (i = 0; i < opt_n_threads && thr_hashrates[i]; i++)
-                hashrate += thr_hashrates[i];
+                hashrate += thr_hashrates[i] / (double)thr_times[i];
             if (i == opt_n_threads) {
                 switch(opt_algo) {
+                case ALGO_CRYPTONIGHT_LIGHT:
                 case ALGO_CRYPTONIGHT:
-                    applog(LOG_INFO, "Total: %s H/s", hashrate);
+                    applog(LOG_INFO, "Total: %f H/s", hashrate);
                     break;
                 default:
                     sprintf(s, hashrate >= 1e6 ? "%.0f" : "%.2f", 1e-3 * hashrate);
@@ -1486,7 +1498,7 @@ static void parse_arg(int key, char *arg) {
     case 'a':
         for (i = 0; i < ARRAY_SIZE(algo_names); i++) {
             if (algo_names[i] && !strcmp(arg, algo_names[i])) {
-                //opt_algo = i;
+                opt_algo = i;
                 break;
             }
         }
@@ -1718,16 +1730,20 @@ static void signal_handler(int sig) {
     case SIGINT:
         applog(LOG_INFO, "SIGINT received, exiting");
         #if defined __unix__ && (!defined __APPLE__)
-		if(opt_algo == ALGO_CRYPTONIGHT)
-			for(i = 0; i < opt_n_threads; i++) munmap(persistentctxs[i], sizeof(struct cryptonight_ctx));
+		if(opt_algo == ALGO_CRYPTONIGHT || opt_algo == ALGO_CRYPTONIGHT_LIGHT) {
+            size_t size = (opt_algo == ALGO_CRYPTONIGHT_LIGHT) ? sizeof(struct cryptonight_light_ctx) : sizeof(struct cryptonight_ctx);
+			for(i = 0; i < opt_n_threads; i++) munmap(persistentctxs[i], size);
+        }
 		#endif
         exit(0);
         break;
     case SIGTERM:
         applog(LOG_INFO, "SIGTERM received, exiting");
         #if defined __unix__ && (!defined __APPLE__)
-		if(opt_algo == ALGO_CRYPTONIGHT)
-			for(i = 0; i < opt_n_threads; i++) munmap(persistentctxs[i], sizeof(struct cryptonight_ctx));
+		if(opt_algo == ALGO_CRYPTONIGHT || opt_algo == ALGO_CRYPTONIGHT_LIGHT) {
+            size_t size = (opt_algo == ALGO_CRYPTONIGHT_LIGHT) ? sizeof(struct cryptonight_light_ctx) : sizeof(struct cryptonight_ctx);
+			for(i = 0; i < opt_n_threads; i++) munmap(persistentctxs[i], size);
+        }
 		#endif
         exit(0);
         break;
@@ -1931,8 +1947,10 @@ int main(int argc, char *argv[]) {
 
     applog(LOG_INFO, "workio thread dead, exiting.");
 	#if defined __unix__ && (!defined __APPLE__)
-	if(opt_algo == ALGO_CRYPTONIGHT)
-		for(i = 0; i < opt_n_threads; i++) munmap(persistentctxs[i], sizeof(struct cryptonight_ctx));
+	if(opt_algo == ALGO_CRYPTONIGHT || opt_algo == ALGO_CRYPTONIGHT_LIGHT) {
+        size_t size = (opt_algo == ALGO_CRYPTONIGHT_LIGHT) ? sizeof(struct cryptonight_light_ctx) : sizeof(struct cryptonight_ctx);
+		for(i = 0; i < opt_n_threads; i++) munmap(persistentctxs[i], size);
+    }
 	#endif
     return 0;
 }

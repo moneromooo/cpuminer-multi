@@ -205,17 +205,20 @@ static inline void xor_blocks(uint8_t *restrict a, const uint8_t *restrict b) {
     ((uint64_t*) a)[1] ^= ((uint64_t*) b)[1];
 }
 
-void cryptonight_hash_ctx(void *restrict output, const void *restrict input, struct cryptonight_ctx *restrict ctx) {
+void cryptonight_hash_ctx(void *restrict output, const void *restrict input, struct cryptonight_ctx *restrict ctx, int light) {
     
     ctx->aes_ctx = (oaes_ctx*) oaes_alloc();
     size_t i, j;
     //hash_process(&ctx->state.hs, (const uint8_t*) input, 76);
     keccak((const uint8_t *)input, 76, &ctx->state.hs, 200);
     memcpy(ctx->text, ctx->state.init, INIT_SIZE_BYTE);
+    const size_t memory = light ? MEMORY/2 : MEMORY;
+    const size_t iter = light ? ITER/8 : ITER/4;
+    const size_t mask = (0x20000 / (light ? 2 : 1) - 1) << 4;
     
     oaes_key_import_data(ctx->aes_ctx, ctx->state.hs.b, AES_KEY_SIZE);
     
-    for(i = 0; likely(i < MEMORY); i += INIT_SIZE_BYTE)
+    for(i = 0; likely(i < memory); i += INIT_SIZE_BYTE)
     {
 		for(j = 0; j < 10; j++)
 		{
@@ -240,27 +243,27 @@ void cryptonight_hash_ctx(void *restrict output, const void *restrict input, str
     //xor_blocks_dst(&ctx->state.k[0], &ctx->state.k[32], ctx->a);
     //xor_blocks_dst(&ctx->state.k[16], &ctx->state.k[48], ctx->b);
 
-    for (i = 0; likely(i < ITER / 4); ++i) {
+    for (i = 0; likely(i < iter); ++i) {
         // Dependency chain: address -> read value ------+
         // written value <-+ hard function (AES or MUL) <+
         // next address  <-+
         //
         // Iteration 1 
-        SubAndShiftAndMixAddRound(ctx->c, &ctx->long_state[((uint64_t *)(ctx->a))[0] & 0x1FFFF0], ctx->a);
-        xor_blocks_dst(ctx->c, ctx->b, &ctx->long_state[((uint64_t *)(ctx->a))[0] & 0x1FFFF0]);
+        SubAndShiftAndMixAddRound(ctx->c, &ctx->long_state[((uint64_t *)(ctx->a))[0] & mask], ctx->a);
+        xor_blocks_dst(ctx->c, ctx->b, &ctx->long_state[((uint64_t *)(ctx->a))[0] & mask]);
         // Iteration 2 
-        mul_sum_xor_dst(ctx->c, ctx->a, &ctx->long_state[((uint64_t *)(ctx->c))[0] & 0x1FFFF0]);
+        mul_sum_xor_dst(ctx->c, ctx->a, &ctx->long_state[((uint64_t *)(ctx->c))[0] & mask]);
         // Iteration 3 
-        SubAndShiftAndMixAddRound(ctx->b, &ctx->long_state[((uint64_t *)(ctx->a))[0] & 0x1FFFF0], ctx->a);
-        xor_blocks_dst(ctx->b, ctx->c, &ctx->long_state[((uint64_t *)(ctx->a))[0] & 0x1FFFF0]);
+        SubAndShiftAndMixAddRound(ctx->b, &ctx->long_state[((uint64_t *)(ctx->a))[0] & mask], ctx->a);
+        xor_blocks_dst(ctx->b, ctx->c, &ctx->long_state[((uint64_t *)(ctx->a))[0] & mask]);
         // Iteration 4 
-        mul_sum_xor_dst(ctx->b, ctx->a, &ctx->long_state[((uint64_t *)(ctx->b))[0] & 0x1FFFF0]);
+        mul_sum_xor_dst(ctx->b, ctx->a, &ctx->long_state[((uint64_t *)(ctx->b))[0] & mask]);
     }
 
     memcpy(ctx->text, ctx->state.init, INIT_SIZE_BYTE);
     oaes_key_import_data(ctx->aes_ctx, &ctx->state.hs.b[32], AES_KEY_SIZE);
     
-    for(i = 0; likely(i < MEMORY); i += INIT_SIZE_BYTE)
+    for(i = 0; likely(i < memory); i += INIT_SIZE_BYTE)
     {
 		xor_blocks(&ctx->text[0x00], &ctx->long_state[i + 0x00]);
 		xor_blocks(&ctx->text[0x10], &ctx->long_state[i + 0x10]);
