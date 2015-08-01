@@ -1060,8 +1060,8 @@ static void *miner_thread(void *userdata) {
 	persistentctx = persistentctxs[thr_id];
 	if(!persistentctx && (opt_algo == ALGO_CRYPTONIGHT || opt_algo == ALGO_CRYPTONIGHT_LIGHT))
 	{
-		#if defined __unix__ && (!defined __APPLE__) && (!defined DISABLE_LINUX_HUGEPAGES)
         size_t size = (opt_algo == ALGO_CRYPTONIGHT_LIGHT) ? sizeof(struct cryptonight_light_ctx) : sizeof(struct cryptonight_ctx);
+		#if defined __unix__ && (!defined __APPLE__) && (!defined DISABLE_LINUX_HUGEPAGES)
 		persistentctx = (struct cryptonight_ctx *)mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, 0, 0);
 		if(persistentctx == MAP_FAILED) persistentctx = (struct cryptonight_ctx *)malloc(size);
 		madvise(persistentctx, size, MADV_RANDOM | MADV_WILLNEED | MADV_HUGEPAGE);
