@@ -1502,6 +1502,9 @@ static void parse_arg(int key, char *arg) {
                 break;
             }
         }
+        /* allow both lite and light names */
+        if (i == ARRAY_SIZE(algo_names) && !strcmp(arg, "cryptonight-lite"))
+            opt_algo = i = ALGO_CRYPTONIGHT_LIGHT;
         if (i == ARRAY_SIZE(algo_names))
             show_usage_and_exit(1);
         break;
