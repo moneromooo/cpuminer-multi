@@ -85,12 +85,14 @@ static inline void ExpandAESKey256(char *keybuf)
 	keys[14] = tmp1;
 }
 
-void cryptonight_hash_ctx(void *restrict output, const void *restrict input, int inlen, struct cryptonight_ctx *restrict ctx)
+void cryptonight_hash_ctx(void *restrict output, const void *restrict input, int inlen, struct cryptonight_ctx *restrict ctx, int variant)
 {
 	keccak((const uint8_t *)input, inlen, &ctx->state.hs, 200);
     uint8_t ExpandedKey[256];
     size_t i, j;
     
+    VARIANT1_INIT();
+
     memcpy(ctx->text, ctx->state.init, INIT_SIZE_BYTE);
     memcpy(ExpandedKey, ctx->state.hs.b, AES_KEY_SIZE);
     ExpandAESKey256(ExpandedKey);
@@ -150,6 +152,8 @@ void cryptonight_hash_ctx(void *restrict output, const void *restrict input, int
 	b_x = _mm_xor_si128(b_x, c_x);
 	_mm_store_si128((__m128i *)&ctx->long_state[a[0] & 0x1FFFF0], b_x);
 
+       VARIANT1_1(&ctx->long_state[a[0] & 0x1FFFF0]);
+
 	uint64_t *nextblock = (uint64_t *)&ctx->long_state[c[0] & 0x1FFFF0];
 	uint64_t b[2];
 	b[0] = nextblock[0];
@@ -177,6 +181,7 @@ void cryptonight_hash_ctx(void *restrict output, const void *restrict input, int
 	a[1] ^= b[1];
 	b_x = c_x;
 	__builtin_prefetch(&ctx->long_state[a[0] & 0x1FFFF0], 0, 3);
+       VARIANT1_2(dst);
 	}
 
     memcpy(ctx->text, ctx->state.init, INIT_SIZE_BYTE);
